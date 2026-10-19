@@ -1,0 +1,8 @@
+rooms:
+  phong1:
+    display_name: ''
+    description: ''
+    room_anchor:
+      x: 0.0
+      y: 0.0
+    doors: []

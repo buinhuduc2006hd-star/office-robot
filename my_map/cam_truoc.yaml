@@ -1,0 +1,16 @@
+front_camera:
+  camera_info_topic: /front_camera/depth/camera_info
+  camera_tilt: 0
+  depth_topic: /front_camera/depth/image_raw
+  distance_offset: 0.0
+  ground_file_path: /home/duc/robot_ws/my_map/cam_truoc.npy
+  median_filter: 3
+  min_area: 150
+  morphology_size: 3
+  output_scan_topic: /front_scan_obstacles
+  roi_height: 351
+  roi_width: 637
+  roi_x: 2
+  roi_y: 118
+  target_frame: camera_link
+  threshold: 80

@@ -1,0 +1,39 @@
+rooms:
+  room_001:
+    display_name: Phòng họp 101
+    description: ''
+    room_anchor:
+      x: 3.4
+      y: -1.7
+    doors:
+    - id: main_door
+      p1:
+        x: 3.0
+        y: -2.0
+      p2:
+        x: 3.9
+        y: -2.0
+      zone_depth: 0.25
+      staging_pose:
+        x: 0.0
+        y: 0.0
+        yaw: 0.0
+  '2':
+    display_name: Phòng 2
+    description: ''
+    room_anchor:
+      x: 6.700000305473804
+      y: 3.7500002138316635
+    doors:
+    - id: main_door
+      p1:
+        x: 9.450000346451997
+        y: 1.8000001847743992
+      p2:
+        x: 7.850000322610139
+        y: 1.650000182539225
+      zone_depth: 0.30000001192092896
+      staging_pose:
+        x: 5.00000028014183
+        y: 2.600000196695328
+        yaw: -0.23528591336914623

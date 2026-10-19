@@ -1,0 +1,5 @@
+string room_id
+uint8 state # 0=FREE, 1=BUSY
+---
+bool success
+string message

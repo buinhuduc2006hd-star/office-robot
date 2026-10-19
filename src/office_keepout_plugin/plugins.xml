@@ -1,0 +1,5 @@
+<library path="office_keepout_plugin_core">
+  <class name="office_keepout_plugin::OfficeKeepoutLayer" type="office_keepout_plugin::OfficeKeepoutLayer" base_class_type="nav2_costmap_2d::Layer">
+    <description>Custom Costmap2D layer for Office HMI dynamic keepout zones.</description>
+  </class>
+</library>

@@ -1,0 +1,33 @@
+<?xml version="1.0" ?>
+<sdf version="1.9">
+
+  <model name="cpr_office">
+
+    <static>true</static>
+
+    <link name="office_link">
+
+      <!-- Hình ảnh hiển thị -->
+      <visual name="office_visual">
+        <geometry>
+          <mesh>
+            <uri>meshes/office.dae</uri>
+          </mesh>
+        </geometry>
+      </visual>
+
+      <!-- Va chạm vật lý -->
+      <collision name="office_collision">
+        <geometry>
+          <mesh>
+            <uri>meshes/office.dae</uri>
+          </mesh>
+        </geometry>
+      </collision>
+
+    </link>
+
+  </model>
+
+</sdf>
+

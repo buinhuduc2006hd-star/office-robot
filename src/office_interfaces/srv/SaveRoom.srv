@@ -1,0 +1,4 @@
+office_interfaces/RoomConfig room
+---
+bool success
+string message
