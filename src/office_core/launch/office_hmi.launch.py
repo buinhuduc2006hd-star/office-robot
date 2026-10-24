@@ -7,8 +7,9 @@ from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 
 def generate_launch_description():
-    ws_config = os.path.expanduser('~/robot_ws/config/rooms.yaml')
-    src_config = os.path.expanduser('~/robot_ws/src/office_core/config/rooms.yaml')
+    ws_config = os.path.expanduser('~/office_robot_ws/config/rooms.yaml')
+    src_config = os.path.expanduser('~/office_robot_ws/src/office_core/config/rooms.yaml')
+    legacy_ws_config = os.path.expanduser('~/robot_ws/config/rooms.yaml')
     try:
         pkg_share = get_package_share_directory('office_core')
         default_config = os.path.join(pkg_share, 'config', 'rooms.yaml')
@@ -19,6 +20,8 @@ def generate_launch_description():
         default_config = ws_config
     elif os.path.exists(src_config):
         default_config = src_config
+    elif os.path.exists(legacy_ws_config):
+        default_config = legacy_ws_config
 
     use_schedule = LaunchConfiguration('use_schedule')
     use_rosbridge = LaunchConfiguration('use_rosbridge')

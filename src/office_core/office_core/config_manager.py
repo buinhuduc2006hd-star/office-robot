@@ -9,12 +9,15 @@ class ConfigManager(Node):
     def __init__(self):
         super().__init__('config_manager')
         
-        default_config = os.path.join(os.path.expanduser('~'), 'robot_ws', 'config', 'rooms.yaml')
+        default_config = os.path.join(os.path.expanduser('~'), 'office_robot_ws', 'config', 'rooms.yaml')
+        if not os.path.exists(default_config):
+            default_config = os.path.join(os.path.expanduser('~'), 'robot_ws', 'config', 'rooms.yaml')
         self.declare_parameter('config_file', default_config)
         self.config_file = self.get_parameter('config_file').get_parameter_value().string_value
-        # Resolve relative path to absolute (relative to ~/robot_ws)
+        # Resolve relative path to absolute
         if not os.path.isabs(self.config_file):
-            self.config_file = os.path.join(os.path.expanduser('~'), 'robot_ws', self.config_file)
+            ws_dir = os.path.join(os.path.expanduser('~'), 'office_robot_ws') if os.path.exists(os.path.join(os.path.expanduser('~'), 'office_robot_ws')) else os.path.join(os.path.expanduser('~'), 'robot_ws')
+            self.config_file = os.path.join(ws_dir, self.config_file)
         
         self.room_list_pub = self.create_publisher(RoomList, 'office/rooms', 10)
         

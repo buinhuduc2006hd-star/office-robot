@@ -117,7 +117,7 @@ def generate_launch_description():
         output='screen'
     )
 
-    models_dir = os.path.expanduser('~/robot_ws/src/mo_hinh/models')
+    models_dir = os.path.expanduser('~/office_robot_ws/src/mo_hinh/models')
     try:
         share_models_dir = os.path.join(get_package_share_directory('mo_hinh'), 'models')
     except Exception:

@@ -116,7 +116,7 @@
     <include>
 
       <uri>
-        file:///home/duc/robot_ws/src/mo_hinh/models/cpr_office
+        file:///home/duc/office_robot_ws/src/mo_hinh/models/cpr_office
       </uri>
 
       <name>
@@ -132,7 +132,7 @@
 
     <!-- Walking Actor -->
     <include>
-      <uri>file:///home/duc/robot_ws/src/mo_hinh/worlds/Walking_actor</uri>
+      <uri>file:///home/duc/office_robot_ws/src/mo_hinh/worlds/Walking_actor</uri>
       <name>walking_actor</name>
       <pose>-0.5 2.0 1.0 0 0 0</pose>
     </include>
