@@ -695,7 +695,8 @@ class NlpHttpClient(QObject):
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.base_url = "http://localhost:8000"
+        self.base_url = os.environ.get("NLP_API_URL", "https://office-robot-nlp.onrender.com")
+        self.api_token = os.environ.get("NLP_API_TOKEN", "6AaM84iEOwagbyBMevzbWzzGZbdGbQrsRi_-e6cNEis")
         self.session_id: Optional[str] = None
         self.is_busy = False
         self.use_mock_mode = False  # Bật nếu người dùng chọn hoặc khi server offline
@@ -706,6 +707,15 @@ class NlpHttpClient(QObject):
         if url:
             self.base_url = url
 
+    def set_api_token(self, token: str):
+        self.api_token = (token or "").strip()
+
+    def _get_headers(self) -> Dict[str, str]:
+        headers = {"Content-Type": "application/json"}
+        if self.api_token:
+            headers["Authorization"] = f"Bearer {self.api_token}"
+        return headers
+
     def set_mock_mode(self, enabled: bool):
         self.use_mock_mode = enabled
         if enabled:
@@ -713,7 +723,7 @@ class NlpHttpClient(QObject):
         else:
             self.status_updated.emit("● Chế độ Kết nối HTTP Trực tiếp")
 
-    def test_health(self, endpoint_url: Optional[str] = None, timeout: float = 3.0):
+    def test_health(self, endpoint_url: Optional[str] = None, timeout: float = 10.0):
         url = (endpoint_url or self.base_url).strip().rstrip("/")
         self.status_updated.emit("Đang kiểm tra kết nối /health...")
         thread = threading.Thread(
@@ -723,7 +733,7 @@ class NlpHttpClient(QObject):
         )
         thread.start()
 
-    def test_connection(self, endpoint_url: Optional[str] = None, timeout: float = 3.0):
+    def test_connection(self, endpoint_url: Optional[str] = None, timeout: float = 10.0):
         """Tương thích ngược: gọi test_health."""
         self.test_health(endpoint_url, timeout)
 
@@ -736,7 +746,7 @@ class NlpHttpClient(QObject):
 
         health_url = f"{url}/health"
         try:
-            resp = requests.get(health_url, timeout=timeout)
+            resp = requests.get(health_url, headers=self._get_headers(), timeout=timeout)
             if resp.status_code == 200:
                 data = resp.json()
                 srv = data.get("service", "unknown")
@@ -744,6 +754,10 @@ class NlpHttpClient(QObject):
                 msg = f"Kết nối tốt: {srv} ({ver})"
                 self.status_updated.emit(msg)
                 self.health_checked.emit(True, msg)
+            elif resp.status_code == 401:
+                msg = "Lỗi xác thực (401 Unauthorized): Bearer Token không hợp lệ hoặc thiếu!"
+                self.status_updated.emit(msg)
+                self.health_checked.emit(False, msg)
             else:
                 msg = f"Server phản hồi HTTP {resp.status_code}"
                 self.status_updated.emit(msg)
@@ -776,7 +790,7 @@ class NlpHttpClient(QObject):
             return
 
         try:
-            resp = requests.post(f"{url}/v1/sessions", json={}, timeout=5.0)
+            resp = requests.post(f"{url}/v1/sessions", json={}, headers=self._get_headers(), timeout=10.0)
             resp.raise_for_status()
             data = resp.json()
             self.session_id = data.get("sessionId")
@@ -790,7 +804,7 @@ class NlpHttpClient(QObject):
             self.status_updated.emit("Không tạo được session trên server")
             self.request_failed.emit(f"Lỗi tạo phiên trên {url}: {str(e)}")
 
-    def send_prompt(self, endpoint_url: str, prompt: str, timeout: float = 12.0):
+    def send_prompt(self, endpoint_url: str, prompt: str, timeout: float = 25.0):
         if self.is_busy:
             self.request_failed.emit("Yêu cầu trước đó đang được xử lý, vui lòng đợi...")
             return
@@ -827,10 +841,12 @@ class NlpHttpClient(QObject):
                 return
 
             # 2. Chế độ Real HTTP API
+            headers = self._get_headers()
+
             # Bước A: Đảm bảo có session
             if not self.session_id:
                 try:
-                    s_resp = requests.post(f"{url}/v1/sessions", json={}, timeout=timeout)
+                    s_resp = requests.post(f"{url}/v1/sessions", json={}, headers=headers, timeout=timeout)
                     s_resp.raise_for_status()
                     self.session_id = s_resp.json().get("sessionId")
                     if self.session_id:
@@ -848,18 +864,18 @@ class NlpHttpClient(QObject):
             if self.session_id:
                 msg_url = f"{url}/v1/sessions/{self.session_id}/messages"
                 try:
-                    resp = requests.post(msg_url, json=msg_payload, timeout=timeout)
+                    resp = requests.post(msg_url, json=msg_payload, headers=headers, timeout=timeout)
                     if resp.status_code == 200:
                         data = resp.json()
                         sent = True
                     elif resp.status_code == 404:
                         # Session có thể đã hết hạn, tạo lại
-                        s_resp = requests.post(f"{url}/v1/sessions", json={}, timeout=timeout)
+                        s_resp = requests.post(f"{url}/v1/sessions", json={}, headers=headers, timeout=timeout)
                         if s_resp.status_code in [200, 201]:
                             self.session_id = s_resp.json().get("sessionId")
                             self.session_created.emit(self.session_id)
                             msg_url = f"{url}/v1/sessions/{self.session_id}/messages"
-                            resp2 = requests.post(msg_url, json=msg_payload, timeout=timeout)
+                            resp2 = requests.post(msg_url, json=msg_payload, headers=headers, timeout=timeout)
                             if resp2.status_code == 200:
                                 data = resp2.json()
                                 sent = True
@@ -874,6 +890,7 @@ class NlpHttpClient(QObject):
                         resp = requests.post(
                             alt_url,
                             json={"message": prompt, "text": prompt, "query": prompt, "messageId": mid},
+                            headers=headers,
                             timeout=timeout
                         )
                         if resp.status_code == 200:
@@ -924,7 +941,7 @@ class NlpHttpClient(QObject):
 
         try:
             url = f"{self.base_url}/v1/tasks/{task_id}"
-            resp = requests.get(url, timeout=4.0)
+            resp = requests.get(url, headers=self._get_headers(), timeout=6.0)
             if resp.status_code == 200:
                 self.task_snapshot_received.emit(resp.json())
         except Exception as e:

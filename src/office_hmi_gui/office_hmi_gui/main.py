@@ -1788,7 +1788,8 @@ class MainWindow(QMainWindow):
 
         h_url = QHBoxLayout()
         h_url.addWidget(QLabel("URL API:"))
-        self.txt_nlp_url = QLineEdit("http://localhost:8000")
+        default_nlp_url = os.environ.get("NLP_API_URL", "https://office-robot-nlp.onrender.com")
+        self.txt_nlp_url = QLineEdit(default_nlp_url)
         self.txt_nlp_url.setStyleSheet("padding: 5px; background-color: #fff; border: 1px solid #cbd5e1; border-radius: 4px; font-size: 12px;")
         h_url.addWidget(self.txt_nlp_url, stretch=1)
 
@@ -1802,6 +1803,23 @@ class MainWindow(QMainWindow):
         self.btn_new_session.clicked.connect(self.on_create_new_session)
         h_url.addWidget(self.btn_new_session)
         grp_endpoint_lo.addLayout(h_url)
+
+        # Hàng nhập Bearer Token
+        h_token = QHBoxLayout()
+        h_token.addWidget(QLabel("Bearer Token:"))
+        default_nlp_token = os.environ.get("NLP_API_TOKEN", "6AaM84iEOwagbyBMevzbWzzGZbdGbQrsRi_-e6cNEis")
+        self.txt_nlp_token = QLineEdit(default_nlp_token)
+        self.txt_nlp_token.setEchoMode(QLineEdit.Password)
+        self.txt_nlp_token.setPlaceholderText("Nhập Bearer Token (Authorization: Bearer <token>)...")
+        self.txt_nlp_token.setStyleSheet("padding: 5px; background-color: #fff; border: 1px solid #cbd5e1; border-radius: 4px; font-size: 11px; font-family: monospace;")
+        h_token.addWidget(self.txt_nlp_token, stretch=1)
+
+        self.btn_toggle_token_vis = QPushButton("👁")
+        self.btn_toggle_token_vis.setToolTip("Hiện / Ẩn Token")
+        self.btn_toggle_token_vis.setStyleSheet("padding: 4px 8px; background-color: #ecf0f1; border: 1px solid #cbd5e1; border-radius: 4px; font-size: 11px;")
+        self.btn_toggle_token_vis.clicked.connect(self.on_toggle_token_visibility)
+        h_token.addWidget(self.btn_toggle_token_vis)
+        grp_endpoint_lo.addLayout(h_token)
 
         self.lbl_nlp_status = QLabel("Trạng thái: ● Đang chạy Giả lập Offline (Mock Contract v1)")
         self.lbl_nlp_status.setStyleSheet("color: #27ae60; font-size: 12px; font-weight: 500;")
@@ -2043,6 +2061,9 @@ class MainWindow(QMainWindow):
         self.lbl_nlp_status.setText("Trạng thái: ⏳ Đang xử lý yêu cầu...")
         self.lbl_nlp_status.setStyleSheet("color: #e67e22; font-size: 12px;")
 
+        if hasattr(self, "txt_nlp_token"):
+            self.nlp_client.set_api_token(self.txt_nlp_token.text().strip())
+
         self.nlp_client.send_prompt(endpoint, text)
         self.log_msg(f"[NLP Request] '{text}'", Qt.darkBlue)
 
@@ -2172,15 +2193,31 @@ class MainWindow(QMainWindow):
         else:
             self.lbl_nlp_status.setStyleSheet("color: #e67e22; font-size: 12px;")
 
+    def on_toggle_token_visibility(self):
+        if not hasattr(self, "txt_nlp_token"):
+            return
+        if self.txt_nlp_token.echoMode() == QLineEdit.Password:
+            self.txt_nlp_token.setEchoMode(QLineEdit.Normal)
+            self.btn_toggle_token_vis.setText("🔒")
+            self.btn_toggle_token_vis.setToolTip("Ẩn Token")
+        else:
+            self.txt_nlp_token.setEchoMode(QLineEdit.Password)
+            self.btn_toggle_token_vis.setText("👁")
+            self.btn_toggle_token_vis.setToolTip("Hiện Token")
+
     def on_test_nlp_connection(self):
         endpoint = self.txt_nlp_url.text().strip()
         if not endpoint:
             self.lbl_nlp_status.setText("Trạng thái: Chưa nhập URL")
             return
+        if hasattr(self, "txt_nlp_token"):
+            self.nlp_client.set_api_token(self.txt_nlp_token.text().strip())
         self.nlp_client.test_health(endpoint)
 
     def on_create_new_session(self):
         endpoint = self.txt_nlp_url.text().strip()
+        if hasattr(self, "txt_nlp_token"):
+            self.nlp_client.set_api_token(self.txt_nlp_token.text().strip())
         self.nlp_client.create_new_session(endpoint)
 
     def on_clear_chat(self):
