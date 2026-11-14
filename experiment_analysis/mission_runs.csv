@@ -1,0 +1,2 @@
+﻿run_id,scenario,variant,mission_id,source,request_id,expected_rooms,visited_successful_rooms,expected_count,success_count,skipped_count,failed_count,ui_status,strict_success,wall_duration_s
+20261106T104415Z_8b7d0af,S1_one_room,nlp_mock,mission_b0569b6d50f5,nlp,nlp_963647f5aeb7,03,03,1,1,0,0,COMPLETED,1,59.09939

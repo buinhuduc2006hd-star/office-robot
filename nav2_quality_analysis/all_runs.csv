@@ -1,0 +1,3 @@
+run,scenario,goals_with_terminal_status,goals_succeeded,goal_success_pct_observed,path_rmse_m,path_within_threshold_pct,linear_speed_rmse_mps,min_person_clearance_approx_m
+S1_01,S1_no_person,1,1,100.0,0.025375706761093606,100.0,0.011345923195379736,
+S2_01,S2_walking_actor,0,0,,0.031264715487144885,99.21826704123082,0.016870670171886728,

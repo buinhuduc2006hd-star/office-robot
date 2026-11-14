@@ -1,0 +1,18 @@
+{
+  "log_files": 1,
+  "nlp_trials": 1,
+  "nlp_labeled_trials": 0,
+  "nlp_exact_match_accuracy_pct": null,
+  "nlp_mean_latency_s_host": 0.3101,
+  "nlp_std_latency_s_host": null,
+  "nav_goals": 1,
+  "nav_goals_completed": 1,
+  "nav_success_rate_pct": 100.0,
+  "nav_mean_wall_time_s_success": 55.9288,
+  "nav_mean_distance_m_success": 16.7884,
+  "nav_mean_recoveries_success": 0.0,
+  "missions": 1,
+  "missions_finished": 1,
+  "mission_strict_success_rate_pct": 100.0,
+  "mission_mean_wall_duration_s_success": 59.0994
+}

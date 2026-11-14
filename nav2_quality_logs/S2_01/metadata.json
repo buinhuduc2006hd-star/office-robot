@@ -1,0 +1,18 @@
+{
+  "scenario": "S2_walking_actor",
+  "created_host_utc": "2026-11-08T03:39:02.603352+00:00",
+  "sample_hz": 10.0,
+  "base_frame": "base_footprint",
+  "preferred_reference": "global",
+  "cmd_topic": "/cmd_vel",
+  "cmd_stamped": false,
+  "smoothed_stamped": false,
+  "person_topic": "",
+  "robot_radius_m": 0.473,
+  "person_radius_m": 0.3,
+  "path_threshold_m": 0.1,
+  "velocity_threshold_mps": 0.05,
+  "max_linear_mps": 0.4,
+  "max_angular_radps": 0.3,
+  "note": "ROS time from node clock; scan_min is generic obstacle, NOT human detection. TF path pose is estimated localization, not Gazebo ground truth."
+}

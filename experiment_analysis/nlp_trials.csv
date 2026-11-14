@@ -1,0 +1,2 @@
+﻿run_id,scenario,variant,request_id,mode,timestamp_utc,prompt,dialogue_status,destination_ids,document_texts,task_count,latency_s_host,request_outcome,error,case_id,expected_status,expected_rooms,exact_match
+20261106T104415Z_8b7d0af,S1_one_room,nlp_mock,nlp_963647f5aeb7,mock,2026-11-06T10:44:41.525+00:00,giao tài liệu đến phòng 3,TASK_READY,03,tài liệu,1,0.31006,OK,,,,,

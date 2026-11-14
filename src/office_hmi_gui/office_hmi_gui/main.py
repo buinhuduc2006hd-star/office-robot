@@ -27,7 +27,8 @@ except ImportError:
         NlpHttpClient, MessageResponse, TaskDTO, BatchDTO, PreviewDTO, TaskSnapshot
     )
 
-from nav_msgs.msg import OccupancyGrid
+from nav_msgs.msg import OccupancyGrid, Odometry
+from office_hmi_gui.experiment_logger import ExperimentLogger  # OFFICE_METRICS_PATCH_V1
 from office_interfaces.msg import RoomList, RoomState, RoomConfig, DoorConfig, KeepoutZone, ActiveKeepoutZones
 from office_interfaces.srv import SetRoomState, SaveRoom, DeleteRoom
 from geometry_msgs.msg import Point, Pose2D, Twist, Polygon, Point32
@@ -123,6 +124,14 @@ class MapViewer(QGraphicsView):
 class ROSNode(Node):
     def __init__(self):
         super().__init__('office_hmi_gui')
+        self.metrics = ExperimentLogger()
+        self._metrics_active_goal_id = None
+        self._metrics_active_mission_id = None
+        self._metrics_active_room_id = None
+        self._metrics_last_feedback_ns = 0
+        self._metrics_last_odom_ns = 0
+        self._metrics_odom_sub = self.create_subscription(Odometry, '/odom', self._metrics_odom_cb, 10)
+        self.get_logger().info(f'[METRICS] Logging to {self.metrics.events_path}')
         
         qos_profile = QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL)
         self.map_sub = self.create_subscription(OccupancyGrid, '/map', self.map_cb, qos_profile)
@@ -261,8 +270,39 @@ class ROSNode(Node):
         msg.zones = zones
         self.keepout_pub.publish(msg)
 
+    def _metrics_odom_cb(self, msg):
+        """Record odometry at ~5 Hz while a Nav2 goal is active."""
+        goal_id = self._metrics_active_goal_id
+        if not goal_id:
+            return
+        now = time.monotonic_ns()
+        if now - self._metrics_last_odom_ns < 200_000_000:
+            return
+        self._metrics_last_odom_ns = now
+        p = msg.pose.pose.position
+        self.metrics.log(
+            "odom_sample", goal_id=goal_id,
+            mission_id=self._metrics_active_mission_id,
+            room_id=self._metrics_active_room_id,
+            x=float(p.x), y=float(p.y),
+            linear_x=float(msg.twist.twist.linear.x),
+            angular_z=float(msg.twist.twist.angular.z),
+            frame_id=str(msg.header.frame_id),
+            ros_stamp_ns=int(msg.header.stamp.sec) * 1_000_000_000 + int(msg.header.stamp.nanosec),
+        )
+
     def send_nav_goal(self, x, y, yaw=0.0, result_callback=None):
+        # Metrics instrumentation: no goal/callback behavior change intended.
+        goal_id = self.metrics.new_id("goal")
+        mission_id = self._metrics_active_mission_id
+        room_id = self._metrics_active_room_id
+        self.metrics.log(
+            "nav_goal_request", goal_id=goal_id, mission_id=mission_id,
+            room_id=room_id, goal_x=float(x), goal_y=float(y), goal_yaw=float(yaw),
+        )
         if not self.nav_client.wait_for_server(timeout_sec=2.0):
+            self.metrics.log("nav_goal_result", goal_id=goal_id, mission_id=mission_id,
+                             room_id=room_id, success=False, result_status="SERVER_UNAVAILABLE")
             return False, "Nav2 action server 'navigate_to_pose' chưa sẵn sàng!"
 
         goal_msg = NavigateToPose.Goal()
@@ -276,36 +316,87 @@ class ROSNode(Node):
         goal_msg.pose.pose.orientation.z = math.sin(yaw / 2.0)
         goal_msg.pose.pose.orientation.w = math.cos(yaw / 2.0)
 
+        def feedback_cb(msg):
+            if self._metrics_active_goal_id != goal_id:
+                return
+            now = time.monotonic_ns()
+            if now - self._metrics_last_feedback_ns < 500_000_000:
+                return
+            self._metrics_last_feedback_ns = now
+            fb = msg.feedback
+            p = fb.current_pose.pose.position
+            q = fb.current_pose.pose.orientation
+            pose_yaw = math.atan2(
+                2.0 * (q.w * q.z + q.x * q.y),
+                1.0 - 2.0 * (q.y * q.y + q.z * q.z),
+            )
+            nav_s = float(fb.navigation_time.sec) + float(fb.navigation_time.nanosec) * 1e-9
+            self.metrics.log(
+                "nav_feedback", goal_id=goal_id, mission_id=mission_id, room_id=room_id,
+                nav_time_s=nav_s,
+                distance_remaining_m=float(fb.distance_remaining),
+                recoveries=int(fb.number_of_recoveries),
+                pose_x=float(p.x), pose_y=float(p.y), pose_yaw=pose_yaw,
+                pose_frame=str(fb.current_pose.header.frame_id),
+            )
+
         def goal_response_callback(future):
             try:
                 goal_handle = future.result()
             except Exception as e:
+                self.metrics.log("nav_goal_result", goal_id=goal_id, mission_id=mission_id,
+                                 room_id=room_id, success=False, result_status="GOAL_RESPONSE_ERROR",
+                                 error=str(e))
                 if result_callback:
                     result_callback(False, str(e))
                 return
             if not goal_handle.accepted:
+                self.metrics.log("nav_goal_result", goal_id=goal_id, mission_id=mission_id,
+                                 room_id=room_id, success=False, result_status="REJECTED")
                 if result_callback:
                     result_callback(False, "Goal bị từ chối bởi Nav2!")
                 return
             self.current_goal_handle = goal_handle
+            self._metrics_active_goal_id = goal_id
+            self._metrics_last_feedback_ns = 0
+            self._metrics_last_odom_ns = 0
+            self.metrics.log("nav_goal_accepted", goal_id=goal_id, mission_id=mission_id,
+                             room_id=room_id)
             res_future = goal_handle.get_result_async()
+
             def res_cb(rf):
                 self.current_goal_handle = None
+                if self._metrics_active_goal_id == goal_id:
+                    self._metrics_active_goal_id = None
                 try:
                     res = rf.result()
-                    success = (res.status == 4)  # 4 = STATUS_SUCCEEDED
+                    success = (res.status == 4)  # STATUS_SUCCEEDED (ROS 2 Humble)
+                    self.metrics.log("nav_goal_result", goal_id=goal_id,
+                                     mission_id=mission_id, room_id=room_id,
+                                     success=bool(success), result_status=int(res.status))
                     if result_callback:
                         result_callback(success, f"Status: {res.status}")
                 except Exception as e:
+                    self.metrics.log("nav_goal_result", goal_id=goal_id,
+                                     mission_id=mission_id, room_id=room_id,
+                                     success=False, result_status="RESULT_ERROR", error=str(e))
                     if result_callback:
                         result_callback(False, str(e))
             res_future.add_done_callback(res_cb)
 
-        future = self.nav_client.send_goal_async(goal_msg)
-        future.add_done_callback(goal_response_callback)
-        return True, "Goal đã được gửi thành công."
+        try:
+            future = self.nav_client.send_goal_async(goal_msg, feedback_callback=feedback_cb)
+            future.add_done_callback(goal_response_callback)
+            return True, "Goal đã được gửi thành công."
+        except Exception as e:
+            self.metrics.log("nav_goal_result", goal_id=goal_id,
+                             mission_id=mission_id, room_id=room_id,
+                             success=False, result_status="SEND_ERROR", error=str(e))
+            return False, str(e)
 
     def cancel_nav_goal(self):
+        self.metrics.log('nav_cancel_request', goal_id=self._metrics_active_goal_id,
+                         mission_id=self._metrics_active_mission_id)
         if self.current_goal_handle:
             try:
                 self.current_goal_handle.cancel_goal_async()
@@ -326,6 +417,11 @@ class MainWindow(QMainWindow):
     def __init__(self, ros_node):
         super().__init__()
         self.ros_node = ros_node
+        self.metrics = ros_node.metrics
+        self._metrics_nlp_pending = None
+        self._metrics_last_nlp_response = None
+        self._metrics_mission_id = None
+        self._metrics_pending_source = 'manual'
         self.setWindowTitle("Office HMI Control Panel")
         self.resize(1300, 850)
         
@@ -1207,6 +1303,13 @@ class MainWindow(QMainWindow):
             return
 
         self.pending_mission_rooms = resolved_rooms
+        self._metrics_mission_id = self.metrics.new_id('mission')
+        self.ros_node._metrics_active_mission_id = self._metrics_mission_id
+        self.metrics.log('mission_start', mission_id=self._metrics_mission_id,
+                         expected_rooms=list(resolved_rooms),
+                         source=self._metrics_pending_source,
+                         request_id=self._metrics_last_nlp_response if self._metrics_pending_source == 'nlp' else None)
+        self._metrics_pending_source = 'manual'
         self.is_mission_running = True
         self.btn_start_mission.setEnabled(False)
         self.btn_cancel_mission.setEnabled(True)
@@ -1218,6 +1321,8 @@ class MainWindow(QMainWindow):
             return
 
         if not self.pending_mission_rooms:
+            self.metrics.log('mission_end', mission_id=self._metrics_mission_id, ui_status='COMPLETED')
+            self.ros_node._metrics_active_mission_id = None
             self.log_msg("🎉 ĐÃ HOÀN THÀNH TẤT CẢ CÁC NHIỆM VỤ GIAO PHÒNG!", Qt.darkGreen)
             self.lbl_mission_status.setText("Trạng thái: Hoàn thành nhiệm vụ!")
             self.is_mission_running = False
@@ -1228,12 +1333,16 @@ class MainWindow(QMainWindow):
             return
 
         current_rid = self.pending_mission_rooms.pop(0)
+        self.ros_node._metrics_active_room_id = current_rid
+        self.metrics.log('mission_room_start', mission_id=self._metrics_mission_id, room_id=current_rid)
         room = self.ros_node.rooms.get(current_rid)
         room_name = room.display_name if room else f"phòng {current_rid}"
 
         # KIỂM TRA TRẠNG THÁI BUSY
         state = self.ros_node.room_states.get(current_rid, 0)
         if state == 1:
+            self.metrics.log('mission_room_skipped', mission_id=self._metrics_mission_id,
+                             room_id=current_rid, reason='BUSY')
             self.log_msg(
                 f"⚠️ Phòng [{current_rid} - {room_name}] đang BẬN (BUSY - Cửa khóa/Keepout đang bật)! ➔ TỰ ĐỘNG BỎ QUA và chuyển sang phòng kế tiếp...",
                 QColor(211, 84, 0)
@@ -1291,6 +1400,8 @@ class MainWindow(QMainWindow):
                 target_desc = f"Điểm chờ ngoài cửa ({tx:.2f}, {ty:.2f}) [Fallback]"
 
         if tx is None:
+            self.metrics.log('mission_room_skipped', mission_id=self._metrics_mission_id,
+                             room_id=current_rid, reason='NO_COORDINATES')
             self.log_msg(f"❌ Phòng [{current_rid}] chưa được cài đặt tọa độ Anchor hoặc Staging! Bỏ qua.", Qt.red)
             QTimer.singleShot(1000, self.process_next_mission_room)
             return
@@ -1305,6 +1416,10 @@ class MainWindow(QMainWindow):
 
         ok, err_msg = self.ros_node.send_nav_goal(tx, ty, tyaw, result_callback=on_result)
         if not ok:
+            self.metrics.log('mission_room_result', mission_id=self._metrics_mission_id,
+                             room_id=current_rid, success=False, detail=str(err_msg))
+            self.metrics.log('mission_end', mission_id=self._metrics_mission_id,
+                             ui_status='NAV2_SEND_ERROR')
             self.log_msg(f"❌ Lỗi gửi Nav2: {err_msg}", Qt.red)
             self.lbl_mission_status.setText("Lỗi kết nối Nav2!")
             self.is_mission_running = False
@@ -1318,6 +1433,8 @@ class MainWindow(QMainWindow):
             return
 
         rid = getattr(self, 'current_mission_room_id', 'Unknown')
+        self.metrics.log('mission_room_result', mission_id=self._metrics_mission_id,
+                         room_id=rid, success=bool(success), detail=str(message))
         if success:
             self.log_msg(f"✅ Đã đến điểm giao phòng [{rid}] an toàn! Dừng phục vụ 3 giây trước khi đi phòng tiếp theo...", Qt.darkGreen)
             self.lbl_mission_status.setText(f"Đã đến phòng {rid}. Đang chờ 3s...")
@@ -1328,6 +1445,8 @@ class MainWindow(QMainWindow):
             QTimer.singleShot(2000, self.process_next_mission_room)
 
     def cancel_mission(self):
+        self.metrics.log('mission_end', mission_id=self._metrics_mission_id, ui_status='CANCELLED')
+        self.ros_node._metrics_active_mission_id = None
         self.is_mission_running = False
         self.mission_force_anchor = False
         self.mission_force_staging = False
@@ -1872,28 +1991,7 @@ class MainWindow(QMainWindow):
 
         right_lo.addWidget(grp_status)
 
-        # 3. Phản hồi văn bản từ Trợ lý
-        grp_resp = QGroupBox("📝 Phản hồi từ Trợ lý (Assistant Reply)")
-        grp_resp_lo = QVBoxLayout(grp_resp)
-        self.txt_nlp_response_view = QTextEdit()
-        self.txt_nlp_response_view.setReadOnly(True)
-        self.txt_nlp_response_view.setMaximumHeight(70)
-        self.txt_nlp_response_view.setStyleSheet("""
-            QTextEdit {
-                background-color: #f8fafc;
-                color: #1e293b;
-                border: 1px solid #cbd5e1;
-                border-radius: 6px;
-                padding: 8px;
-                font-size: 12px;
-                font-weight: 500;
-            }
-        """)
-        self.txt_nlp_response_view.setPlaceholderText("Phản hồi văn bản từ NLP API sẽ hiển thị ở đây...")
-        grp_resp_lo.addWidget(self.txt_nlp_response_view)
-        right_lo.addWidget(grp_resp)
-
-        # 4. Danh sách Batch & Thứ tự thực hiện (Order Preview)
+        # 3. Danh sách Batch & Thứ tự thực hiện (Order Preview)
         grp_batch = QGroupBox("📍 Lộ trình Giao nhận & Thứ tự Thực thi (Batch & Order Preview)")
         grp_batch_lo = QVBoxLayout(grp_batch)
         grp_batch_lo.setSpacing(6)
@@ -1966,15 +2064,42 @@ class MainWindow(QMainWindow):
         h_dispatch.addWidget(self.btn_clear_batch, stretch=1)
         grp_batch_lo.addLayout(h_dispatch)
 
-        # Dữ liệu kỹ thuật JSON (Raw JSON)
+        # 4. Khung hiển thị Raw JSON MessageResponse (Mở rộng to rõ)
+        grp_json = QGroupBox("📄 Chi tiết Phản hồi MessageResponse (Raw DTO JSON)")
+        grp_json.setStyleSheet("""
+            QGroupBox {
+                font-size: 12px;
+                font-weight: bold;
+                color: #2c3e50;
+                border: 1px solid #cbd5e1;
+                border-radius: 6px;
+                margin-top: 6px;
+                padding-top: 8px;
+            }
+        """)
+        grp_json_lo = QVBoxLayout(grp_json)
         self.txt_raw_json = QTextEdit()
         self.txt_raw_json.setReadOnly(True)
-        self.txt_raw_json.setMaximumHeight(65)
-        self.txt_raw_json.setStyleSheet("background-color: #f8fafc; color: #64748b; font-family: monospace; font-size: 11px; border: 1px solid #e2e8f0; border-radius: 4px;")
-        self.txt_raw_json.setPlaceholderText("Raw DTO JSON (MessageResponse)...")
-        grp_batch_lo.addWidget(self.txt_raw_json)
+        self.txt_raw_json.setStyleSheet("""
+            QTextEdit {
+                background-color: #f8fafc;
+                color: #1e293b;
+                font-family: 'Consolas', 'DejaVu Sans Mono', 'Courier New', monospace;
+                font-size: 11px;
+                border: 1px solid #cbd5e1;
+                border-radius: 6px;
+                padding: 8px;
+            }
+        """)
+        self.txt_raw_json.setPlaceholderText("Raw DTO JSON (MessageResponse) sẽ hiển thị chi tiết ở đây...")
+        grp_json_lo.addWidget(self.txt_raw_json)
 
-        right_lo.addWidget(grp_batch, stretch=1)
+        # Splitter dọc chia đều và cho phép kéo giãn giữa Bảng Lộ trình và JSON
+        v_splitter = QSplitter(Qt.Vertical)
+        v_splitter.addWidget(grp_batch)
+        v_splitter.addWidget(grp_json)
+        v_splitter.setSizes([200, 320])
+        right_lo.addWidget(v_splitter, stretch=1)
 
         splitter.addWidget(right_box)
         splitter.setSizes([560, 480])
@@ -2064,6 +2189,9 @@ class MainWindow(QMainWindow):
         if hasattr(self, "txt_nlp_token"):
             self.nlp_client.set_api_token(self.txt_nlp_token.text().strip())
 
+        self._metrics_nlp_pending = self.metrics.new_id('nlp')
+        self.metrics.log('nlp_request', request_id=self._metrics_nlp_pending,
+                         prompt=text, mode='mock' if self.nlp_client.use_mock_mode else 'http')
         self.nlp_client.send_prompt(endpoint, text)
         self.log_msg(f"[NLP Request] '{text}'", Qt.darkBlue)
 
@@ -2097,6 +2225,15 @@ class MainWindow(QMainWindow):
                 else:
                     ordered_tasks = tasks
         self.current_ordered_tasks = ordered_tasks
+        def _metrics_task_value(t, attr):
+            return t.get(attr, '') if isinstance(t, dict) else getattr(t, attr, '')
+        self.metrics.log('nlp_response', request_id=self._metrics_nlp_pending,
+                         dialogue_status=str(status),
+                         destination_ids=[str(_metrics_task_value(t, 'destinationId')) for t in ordered_tasks],
+                         document_texts=[str(_metrics_task_value(t, 'documentText')) for t in ordered_tasks],
+                         task_count=len(ordered_tasks))
+        self._metrics_last_nlp_response = self._metrics_nlp_pending
+        self._metrics_nlp_pending = None
 
         # Hiển thị tin nhắn trợ lý trong khung chat
         timestamp = time.strftime("%H:%M:%S")
@@ -2149,9 +2286,6 @@ class MainWindow(QMainWindow):
             self.lbl_status_hint.setText("Chưa hiểu lệnh. Bạn hãy thử chọn các câu lệnh mẫu ở góc trái.")
             self.lbl_status_hint.setStyleSheet("color: #c0392b; font-size: 11px;")
 
-        # Cập nhật phản hồi văn bản
-        self.txt_nlp_response_view.setText(reply)
-
         # Cập nhật bảng Lộ trình
         self.update_batch_display(self.current_nlp_batch, ordered_tasks)
 
@@ -2180,6 +2314,10 @@ class MainWindow(QMainWindow):
         """
         self.txt_chat_history.append(err_html)
         self.txt_chat_history.verticalScrollBar().setValue(self.txt_chat_history.verticalScrollBar().maximum())
+        if hasattr(self, "txt_raw_json"):
+            self.txt_raw_json.setText(f'{{\n  "status": "ERROR",\n  "error": "{err_msg}"\n}}')
+        self.metrics.log('nlp_error', request_id=self._metrics_nlp_pending, error=str(err_msg))
+        self._metrics_nlp_pending = None
         self.log_msg(f"[NLP Error] {err_msg}", Qt.red)
 
     def update_nlp_status(self, status_text):
@@ -2223,6 +2361,8 @@ class MainWindow(QMainWindow):
     def on_clear_chat(self):
         self.txt_chat_history.clear()
         self.init_chat_welcome()
+        if hasattr(self, "txt_raw_json"):
+            self.txt_raw_json.clear()
 
     def update_batch_display(self, batch_data, ordered_tasks):
         self.table_batch.setRowCount(0)
@@ -2369,6 +2509,7 @@ class MainWindow(QMainWindow):
 
         # Chuyển ngay sang tab Bản đồ & Bắt đầu nhiệm vụ
         self.tabs.setCurrentIndex(0)
+        self._metrics_pending_source = 'nlp'
         self.start_mission()
         QMessageBox.information(
             self,
