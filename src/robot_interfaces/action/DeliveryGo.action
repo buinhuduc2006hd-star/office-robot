@@ -1,0 +1,10 @@
+# Immutable backend mission identity and validated staging pose.
+string assignment_id
+string boot_id
+string goal_id
+geometry_msgs/PoseStamped pose
+---
+bool success
+string finish_message
+---
+float32 distance_remaining

@@ -9,6 +9,7 @@ endif()
 find_package(ament_cmake REQUIRED)
 find_package(rosidl_default_generators REQUIRED)
 find_package(action_msgs REQUIRED)
+find_package(geometry_msgs REQUIRED)
 
 rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/RobotStatus.msg"
@@ -25,7 +26,8 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "srv/GetRoute.srv"
   "action/Patrol.action"
   "action/DirectGo.action"
-  DEPENDENCIES action_msgs
+  "action/DeliveryGo.action"
+  DEPENDENCIES action_msgs geometry_msgs
 )
 
 if(BUILD_TESTING)

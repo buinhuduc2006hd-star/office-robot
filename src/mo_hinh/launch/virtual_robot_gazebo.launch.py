@@ -9,7 +9,7 @@ import os
 
 
 def resolve_path(sub_dir, file_name, pkg_name='mo_hinh'):
-    for ws in ['robot_ws', 'office_robot_ws', 'ros2_ws']:
+    for ws in ['office_robot_ws', 'robot_ws', 'ros2_ws']:
         ws_src_path = os.path.expanduser(f'~/{ws}/src/{pkg_name}/{sub_dir}/{file_name}')
         if os.path.exists(ws_src_path):
             return ws_src_path
@@ -150,7 +150,7 @@ def generate_launch_description():
     robot_worlds = os.path.expanduser('~/robot_ws/src/mo_hinh/worlds')
     office_worlds = os.path.expanduser('~/office_robot_ws/src/mo_hinh/worlds')
 
-    all_paths = f"{models_dir}:{share_models_dir}:{worlds_dir}:{share_worlds_dir}:{robot_worlds}:{office_worlds}:{share_parent}:{robot_ws_src}:{office_ws_src}"
+    all_paths = f"{models_dir}:{share_models_dir}:{worlds_dir}:{share_worlds_dir}:{office_worlds}:{robot_worlds}:{share_parent}:{office_ws_src}:{robot_ws_src}"
 
     gz_resource_env = AppendEnvironmentVariable(
         name='GZ_SIM_RESOURCE_PATH',

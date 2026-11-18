@@ -25,6 +25,7 @@ def generate_launch_description():
     use_rviz = LaunchConfiguration('use_rviz')
     use_nav2 = LaunchConfiguration('use_nav2')
     nav2_autostart = LaunchConfiguration('nav2_autostart')
+    urdf_file = LaunchConfiguration('urdf_file')
     world = LaunchConfiguration('world')
     x_pose = LaunchConfiguration('x_pose')
     y_pose = LaunchConfiguration('y_pose')
@@ -37,6 +38,7 @@ def generate_launch_description():
     gazebo_launch = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(virtual_gazebo_launch),
         launch_arguments={
+            'urdf_file': urdf_file,
             'use_sim_time': use_sim_time,
             'gui': gui,
             'world': world,
@@ -89,6 +91,7 @@ def generate_launch_description():
     delayed_rviz = TimerAction(period=6.0, actions=[rviz_node])
 
     return LaunchDescription([
+        DeclareLaunchArgument('urdf_file', default_value='xe.urdf', description='URDF file name or path'),
         DeclareLaunchArgument('use_sim_time', default_value='true'),
         DeclareLaunchArgument('gui', default_value='true'),
         DeclareLaunchArgument('use_rviz', default_value='true'),

@@ -33,6 +33,7 @@ from PyQt5.QtWidgets import (
     QPushButton,
     QRadioButton,
     QScrollArea,
+    QTabWidget,
     QTextEdit,
     QVBoxLayout,
     QWidget,
@@ -56,8 +57,13 @@ from tf2_ros.transform_listener import TransformListener
 
 from map_editor import MapEditorDialog
 
-
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+if SCRIPT_DIR not in sys.path:
+    sys.path.insert(0, SCRIPT_DIR)
+
+from office_delivery_client import DeliveryClient
+from office_delivery_ros import DeliveryRosBridge
+from office_delivery_ui import OfficeDeliveryTab
 WS_ROOT = os.path.abspath(os.path.join(SCRIPT_DIR, ".."))
 CONFIG_DIR = os.path.join(WS_ROOT, "config")
 MO_HINH_CONFIG_DIR = os.path.join(WS_ROOT, "src", "mo_hinh", "config")
@@ -232,6 +238,7 @@ class RosInterface(Node):
         pose_callback=None,
         scan_callback=None,
         dataenc_callback=None,
+        delivery_mode=True,
     ):
         super().__init__("desktop_nav_gui_v2")
         self.log_callback = log_callback
@@ -277,15 +284,66 @@ class RosInterface(Node):
             20,
         )
 
-        self.goal_pub = self.create_publisher(PoseStamped, "/goal_pose", 10)
-        self.waypoints_pub = self.create_publisher(String, "/nhiemvuboss/waypoints_json", 10)
-        self.nav_to_pose_client = ActionClient(self, NavigateToPose, "navigate_to_pose")
-        
-        self.cmd_vel_pub = self.create_publisher(Twist, "/cmd_vel", 10)
-        self.cancel_nav2_client = self.create_client(CancelGoal, "/navigate_to_pose/_action/cancel_goal")
-        self.cancel_nav_through_client = self.create_client(CancelGoal, "/navigate_through_poses/_action/cancel_goal")
-        
+        # Nav2 and manual motion handles (managed per active mode)
+        self.goal_pub = None
+        self.waypoints_pub = None
+        self.nav_to_pose_client = None
+        self.cmd_vel_pub = None
+        self.cancel_nav2_client = None
+        self.cancel_nav_through_client = None
+
+        self.delivery_mode = delivery_mode
+        if not self.delivery_mode:
+            self.setup_manual_ros_interfaces()
+        else:
+            self.log("[NAV2 ISOLATION] Khởi động ở chế độ Office Delivery v1: direct /cmd_vel, NavigateToPose client, /goal_pose KHÔNG đăng ký.")
+
         self.pose_timer = self.create_timer(0.05, self.publish_pose_from_tf)
+
+    def setup_manual_ros_interfaces(self):
+        """Active only in Legacy Manual/Mapping mode."""
+        if self.goal_pub is None:
+            self.goal_pub = self.create_publisher(PoseStamped, "/goal_pose", 10)
+        if self.waypoints_pub is None:
+            self.waypoints_pub = self.create_publisher(String, "/nhiemvuboss/waypoints_json", 10)
+        if self.nav_to_pose_client is None:
+            self.nav_to_pose_client = ActionClient(self, NavigateToPose, "navigate_to_pose")
+        if self.cmd_vel_pub is None:
+            self.cmd_vel_pub = self.create_publisher(Twist, "/cmd_vel", 10)
+        if self.cancel_nav2_client is None:
+            self.cancel_nav2_client = self.create_client(CancelGoal, "/navigate_to_pose/_action/cancel_goal")
+        if self.cancel_nav_through_client is None:
+            self.cancel_nav_through_client = self.create_client(CancelGoal, "/navigate_through_poses/_action/cancel_goal")
+
+    def teardown_manual_ros_interfaces(self):
+        """Cleanly destroy all manual Nav2/cmd_vel publishers and clients for Delivery mode."""
+        if self.goal_pub is not None:
+            self.destroy_publisher(self.goal_pub)
+            self.goal_pub = None
+        if self.waypoints_pub is not None:
+            self.destroy_publisher(self.waypoints_pub)
+            self.waypoints_pub = None
+        if self.cmd_vel_pub is not None:
+            self.destroy_publisher(self.cmd_vel_pub)
+            self.cmd_vel_pub = None
+        if self.nav_to_pose_client is not None:
+            self.nav_to_pose_client.destroy()
+            self.nav_to_pose_client = None
+        if self.cancel_nav2_client is not None:
+            self.destroy_client(self.cancel_nav2_client)
+            self.cancel_nav2_client = None
+        if self.cancel_nav_through_client is not None:
+            self.destroy_client(self.cancel_nav_through_client)
+            self.cancel_nav_through_client = None
+
+    def set_delivery_mode(self, enabled: bool):
+        self.delivery_mode = bool(enabled)
+        if self.delivery_mode:
+            self.teardown_manual_ros_interfaces()
+            self.log("[NAV2 ISOLATION] Chuyển sang Office Delivery: Đã gỡ bỏ direct /cmd_vel và Nav2 clients.")
+        else:
+            self.setup_manual_ros_interfaces()
+            self.log("[MANUAL MODE] Chuyển sang Manual/Mapping: Đã khởi tạo direct Nav2 và cmd_vel.")
 
     def log(self, msg):
         self.get_logger().info(msg)
@@ -409,8 +467,11 @@ class RosInterface(Node):
         self.dataenc_callback(list(msg.data))
 
     def send_goal(self, x, y, yaw=0.0):
-        if not self.nav_to_pose_client.wait_for_server(timeout_sec=1.0):
-            self.log("NavigateToPose action server ch?a s?n sàng.")
+        if self.delivery_mode:
+            self.log("[NAV2 ISOLATION] Bị từ chối: Không thể gửi goal trực tiếp khi đang ở chế độ Office Delivery.")
+            return False
+        if not self.nav_to_pose_client or not self.nav_to_pose_client.wait_for_server(timeout_sec=1.0):
+            self.log("NavigateToPose action server chưa sẵn sàng.")
             return False
 
         goal_msg = NavigateToPose.Goal()
@@ -424,27 +485,36 @@ class RosInterface(Node):
         goal_msg.pose.pose.orientation.z = math.sin(yaw / 2.0)
         goal_msg.pose.pose.orientation.w = math.cos(yaw / 2.0)
 
-        self.log(f"G?i goal Nav2: x={x:.3f}, y={y:.3f}, yaw={yaw:.3f}")
+        self.log(f"Gửi goal Nav2 (Manual): x={x:.3f}, y={y:.3f}, yaw={yaw:.3f}")
         self.nav_to_pose_client.send_goal_async(goal_msg)
         return True
 
     def send_waypoint_batch(self, waypoints):
+        if self.delivery_mode:
+            self.log("[NAV2 ISOLATION] Bị từ chối: Không thể gửi waypoint batch khi đang ở chế độ Office Delivery.")
+            return
+        if self.waypoints_pub is None:
+            return
         msg = String()
         msg.data = json.dumps({"waypoints": waypoints}, ensure_ascii=False)
         self.waypoints_pub.publish(msg)
         self.log(
-            f"G?i batch waypoint cho nhiemvuboss: {len(waypoints)} ?i?m lên /nhiemvuboss/waypoints_json"
+            f"Gửi batch waypoint cho nhiemvuboss: {len(waypoints)} điểm lên /nhiemvuboss/waypoints_json"
         )
 
     def cancel_nav2_goals(self):
+        if self.delivery_mode:
+            self.log("[SAFETY] Office Delivery: Hủy Nav2 trực tiếp bị vô hiệu hóa (Tránh lỗi CancelGoal P0). Hãy dùng E-stop.")
+            return
         req = CancelGoal.Request()
-        if self.cancel_nav2_client.wait_for_service(timeout_sec=0.1):
+        if self.cancel_nav2_client and self.cancel_nav2_client.wait_for_service(timeout_sec=0.1):
             self.cancel_nav2_client.call_async(req)
-        if self.cancel_nav_through_client.wait_for_service(timeout_sec=0.1):
+        if self.cancel_nav_through_client and self.cancel_nav_through_client.wait_for_service(timeout_sec=0.1):
             self.cancel_nav_through_client.call_async(req)
-        twist = Twist()
-        self.cmd_vel_pub.publish(twist)
-        self.log("Đã phát tín hiệu HỦY chạy Nav2 và dừng khẩn cấp!")
+        if self.cmd_vel_pub:
+            twist = Twist()
+            self.cmd_vel_pub.publish(twist)
+        self.log("Đã phát tín hiệu HỦY chạy Nav2 và dừng khẩn cấp (Legacy Manual)!")
 
 
 class MapViewer(QLabel):
@@ -452,10 +522,11 @@ class MapViewer(QLabel):
         super().__init__(parent)
         self.get_ros_node = ros_node_getter
         self.on_map_click = on_map_click
+        self.read_only = True  # Read-only by default in Delivery mode
         self.setMinimumSize(260, 220)
         self.setAlignment(Qt.AlignCenter)
         self.setStyleSheet("background-color: #1e1e1e; border: 1px solid #555;")
-        self.setText("Ch?a có d? li?u /map")
+        self.setText("Chưa có dữ liệu /map")
 
         self.map_pixmap = None
         self.map_resolution = None
@@ -613,13 +684,18 @@ class MapViewer(QLabel):
 
         painter.setPen(QPen(QColor(0, 255, 0), 1))
         painter.setFont(QFont("Arial", 10))
-        painter.drawText(10, 20, "Click trái ?? g?i goal Nav2")
+        if not self.read_only:
+            painter.drawText(10, 20, "Click trái để gửi goal Nav2 (Manual)")
+        else:
+            painter.drawText(10, 20, "Bản đồ hiển thị (Read-only / Delivery Mode)")
         painter.drawText(10, 38, f"Pose source: {self.pose_source}")
         painter.drawText(10, 56, f"/scan points: {len(self.scan_points_world)}")
         painter.end()
         self.setPixmap(canvas)
 
     def mousePressEvent(self, event):
+        if self.read_only:
+            return
         if event.button() == Qt.LeftButton and self.map_pixmap is not None:
             world = self.widget_to_world(event.pos().x(), event.pos().y())
             if world is None:
@@ -633,7 +709,7 @@ class MapViewer(QLabel):
             if ros_node is not None:
                 ok = ros_node.send_goal(wx, wy, yaw=0.0)
                 if ok:
-                    ros_node.log(f"?ã click goal trên map: ({wx:.3f}, {wy:.3f})")
+                    ros_node.log(f"Đã click goal trên map: ({wx:.3f}, {wy:.3f})")
 
     def widget_to_world(self, px, py):
         if self.map_pixmap is None:
@@ -744,8 +820,8 @@ class MainWindow(QWidget):
 
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Robot Control GUI v2 - Layer1 Odom / Layer2 Mode")
-        self.resize(1200, 760)
+        self.setWindowTitle("Office Robot System - Integration v1 & Desktop GUI")
+        self.resize(1360, 900)
 
         self.temp_files = []
         self.map_dir = _pick_first_existing([DEFAULT_MAP_DIR, MO_HINH_MAP_DIR, WS_ROOT])
@@ -759,6 +835,13 @@ class MainWindow(QWidget):
         self.proc_mgr = ProcessManager(self.append_log)
         self.ros_node = None
         self.ros_spin_thread = None
+        self.delivery_bridge = None
+        self.delivery_client = None
+        if not hasattr(self, "log_box") or self.log_box is None:
+            self.log_box = QTextEdit()
+            self.log_box.setReadOnly(True)
+            self.log_box.setMinimumHeight(140)
+        self.map_view = None
 
         self.log_signal.connect(self._append_log_ui)
         self.map_signal.connect(self._on_new_map_ui)
@@ -766,8 +849,8 @@ class MainWindow(QWidget):
         self.scan_signal.connect(self._on_new_scan_ui)
         self.dataenc_signal.connect(self._on_new_dataenc_ui)
 
-        self.init_ui()
         self.init_ros()
+        self.init_ui()
         self.refresh_map_list()
 
         self.status_timer = QTimer(self)
@@ -931,9 +1014,10 @@ class MainWindow(QWidget):
         control_layout.addWidget(self.lbl_dataenc, 14, 0, 1, 2)
         control_group.setLayout(control_layout)
 
-        self.log_box = QTextEdit()
-        self.log_box.setReadOnly(True)
-        self.log_box.setMinimumHeight(140)
+        if not hasattr(self, "log_box") or self.log_box is None:
+            self.log_box = QTextEdit()
+            self.log_box.setReadOnly(True)
+            self.log_box.setMinimumHeight(140)
         log_group = QGroupBox("Log")
         log_layout = QVBoxLayout()
         log_layout.addWidget(self.log_box)
@@ -954,29 +1038,63 @@ class MainWindow(QWidget):
         left_scroll.setMinimumWidth(320)
 
         self.map_view = MapViewer(self.get_ros_node, self.on_map_clicked)
+        self.map_view.read_only = True
         right_layout = QVBoxLayout()
         right_layout.addWidget(self.map_view)
         right_widget = QWidget()
         right_widget.setLayout(right_layout)
         right_widget.setMinimumWidth(260)
 
-        root_layout = QHBoxLayout()
-        root_layout.addWidget(left_scroll, stretch=0)
-        root_layout.addWidget(right_widget, stretch=1)
-        root_layout.setContentsMargins(6, 6, 6, 6)
-        root_layout.setSpacing(6)
+        legacy_layout = QHBoxLayout()
+        legacy_layout.addWidget(left_scroll, stretch=0)
+        legacy_layout.addWidget(right_widget, stretch=1)
+        legacy_layout.setContentsMargins(6, 6, 6, 6)
+        legacy_layout.setSpacing(6)
+        legacy_container = QWidget()
+        legacy_container.setLayout(legacy_layout)
+
+        # Tab Widget: Tab 0 is Office Delivery v1 (Default), Tab 1 is Legacy Manual/SLAM
+        self.tab_widget = QTabWidget()
+        self.tab_widget.setStyleSheet(
+            "QTabWidget::pane { border: 1px solid #334155; background: #0f172a; } "
+            "QTabBar::tab { background: #1e293b; color: #94a3b8; padding: 8px 18px; font-size: 13px; font-weight: bold; border-top-left-radius: 4px; border-top-right-radius: 4px; margin-right: 2px; } "
+            "QTabBar::tab:selected { background: #2563eb; color: #ffffff; } "
+            "QTabBar::tab:hover:!selected { background: #334155; color: #e2e8f0; }"
+        )
+
+        self.delivery_tab = OfficeDeliveryTab(self.delivery_bridge, self.delivery_client, parent=self)
+        self.tab_widget.addTab(self.delivery_tab, "🏢 OFFICE DELIVERY – INTEGRATION V1")
+        self.tab_widget.addTab(legacy_container, "🗺️ Manual & SLAM Mapping (Legacy)")
+        self.tab_widget.currentChanged.connect(self.on_tab_changed)
+
+        root_layout = QVBoxLayout()
+        root_layout.setContentsMargins(4, 4, 4, 4)
+        root_layout.addWidget(self.tab_widget)
         self.setLayout(root_layout)
 
         self.on_robot_mode_changed()
         self.refresh_batch_waypoint_views()
 
+    def on_tab_changed(self, index: int):
+        is_delivery = (index == 0)
+        if self.ros_node is not None:
+            self.ros_node.set_delivery_mode(is_delivery)
+        if hasattr(self, 'map_view') and self.map_view is not None:
+            self.map_view.read_only = is_delivery
+        if is_delivery:
+            self.append_log("[MODE] Chuyển sang OFFICE DELIVERY – INTEGRATION V1. Quyền điều khiển Nav2 được cô lập fail-safe.")
+        else:
+            self.append_log("[MODE] Chuyển sang MANUAL & SLAM MAPPING (Legacy). Cho phép điều khiển thủ công và click-to-goal.")
+
     def estop_clicked(self):
+        if self.delivery_bridge is not None:
+            self.delivery_bridge.trigger_estop()
         node = self.get_ros_node()
         if node is not None:
             node.cancel_nav2_goals()
         if self.proc_mgr.is_running(self.NHIEMVUBOSS):
             self.stop_nhiemvuboss()
-        self.append_log(">>> USER BẤM E-STOP (HỦY NAV2) <<<")
+        self.append_log(">>> USER BẤM E-STOP (HỦY NAV2 & TRIGGER SAFETY STOP) <<<")
 
     def init_ros(self):
         if not rclpy.ok():
@@ -988,10 +1106,13 @@ class MainWindow(QWidget):
             pose_callback=self.on_new_pose,
             scan_callback=self.on_new_scan,
             dataenc_callback=self.on_new_dataenc,
+            delivery_mode=True,
         )
+        self.delivery_bridge = DeliveryRosBridge(self.ros_node, parent=self)
+        self.delivery_client = DeliveryClient(self)
         self.ros_spin_thread = threading.Thread(target=self.spin_ros, daemon=True)
         self.ros_spin_thread.start()
-        self.append_log("ROS2 node v2 ?ã kh?i ??ng.")
+        self.append_log("ROS2 node v2 đã khởi động (Chế độ Office Delivery v1).")
 
     def spin_ros(self):
         try:
@@ -1006,7 +1127,8 @@ class MainWindow(QWidget):
         self.log_signal.emit(str(text))
 
     def _append_log_ui(self, text):
-        self.log_box.append(text)
+        if hasattr(self, "log_box") and self.log_box is not None:
+            self.log_box.append(text)
 
     def on_new_map(self, msg):
         self.map_signal.emit(msg)
@@ -1021,15 +1143,20 @@ class MainWindow(QWidget):
         self.dataenc_signal.emit(values)
 
     def _on_new_map_ui(self, msg):
-        self.map_view.update_map(msg)
+        if hasattr(self, "map_view") and self.map_view is not None:
+            self.map_view.update_map(msg)
 
     def _on_new_pose_ui(self, x, y, yaw, source):
-        self.map_view.update_pose(x, y, yaw, source)
+        if hasattr(self, "map_view") and self.map_view is not None:
+            self.map_view.update_pose(x, y, yaw, source)
 
     def _on_new_scan_ui(self, msg, scan_points_world):
-        self.map_view.update_scan(msg, scan_points_world)
+        if hasattr(self, "map_view") and self.map_view is not None:
+            self.map_view.update_scan(msg, scan_points_world)
 
     def _on_new_dataenc_ui(self, values):
+        if not hasattr(self, "lbl_dataenc") or self.lbl_dataenc is None:
+            return
         if not values:
             self.lbl_dataenc.setText("Encoder /dataenc: []")
             return
@@ -1659,6 +1786,8 @@ class MainWindow(QWidget):
 
     def force_kill_known_ros_processes(self):
         # Fallback cleanup: ensure no launch/node started by GUI remains alive.
+        if not self.proc_mgr.processes:
+            return
         patterns = [
             "ros2 launch mo_hinh virtual_robot_gazebo.launch.py",
             "ros2 launch mo_hinh real_odom.launch.py",
@@ -1720,6 +1849,10 @@ class MainWindow(QWidget):
         except Exception:
             pass
         try:
+            if hasattr(self, "delivery_tab") and self.delivery_tab is not None:
+                self.delivery_tab.destroy()
+            if hasattr(self, "delivery_bridge") and self.delivery_bridge is not None:
+                self.delivery_bridge.destroy()
             if self.ros_node is not None:
                 self.ros_node.destroy_node()
             if rclpy.ok():

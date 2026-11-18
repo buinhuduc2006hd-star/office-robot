@@ -1,0 +1,14 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>office_robot_edge_gateway</name><version>0.1.0</version>
+  <description>Durable HTTPS/SQLite Office Robot edge adapter with local safety authority.</description>
+  <maintainer email="maintainers@example.invalid">Office Robot team</maintainer>
+  <license>TODO: set by repository maintainers before distribution</license>
+  <buildtool_depend>ament_python</buildtool_depend>
+  <exec_depend>rclpy</exec_depend><exec_depend>nav2_msgs</exec_depend>
+  <exec_depend>action_msgs</exec_depend><exec_depend>std_msgs</exec_depend>
+  <exec_depend>unique_identifier_msgs</exec_depend>
+  <exec_depend>robot_interfaces</exec_depend>
+  <exec_depend>launch_ros</exec_depend>
+  <export><build_type>ament_python</build_type></export>
+</package>

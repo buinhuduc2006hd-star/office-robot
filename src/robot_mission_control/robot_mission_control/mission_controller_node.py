@@ -7,6 +7,8 @@ from robot_interfaces.msg import RobotStatus, CustomerStatus
 from robot_interfaces.action import Patrol, DirectGo
 from robot_interfaces.srv import GetLocation
 
+from robot_edge_gateway.mission_integration import DeliveryMissionMixin
+
 from .bt_core import Blackboard, Fallback, Sequence, NodeStatus
 from .bt_nodes import (
     IsEmergency, StopRobot, IsBatteryLow, ActionGoCharging, 
@@ -14,7 +16,7 @@ from .bt_nodes import (
     IsPatrolRequested, ActionPatrol
 )
 
-class MissionControllerNode(Node):
+class MissionControllerNode(DeliveryMissionMixin, Node):
     def __init__(self):
         super().__init__('mission_controller_node')
         
@@ -22,9 +24,9 @@ class MissionControllerNode(Node):
         self.blackboard = Blackboard()
         
         # Initialize default Blackboard states
-        self.blackboard.set('SYSTEM_lidar_ok', True)
-        self.blackboard.set('SYSTEM_odom_ok', True)
-        self.blackboard.set('SYSTEM_localization_ok', True)
+        self.blackboard.set('SYSTEM_lidar_ok', False)
+        self.blackboard.set('SYSTEM_odom_ok', False)
+        self.blackboard.set('SYSTEM_localization_ok', False)
         self.blackboard.set('SYSTEM_battery_low', False)
         self.blackboard.set('SYSTEM_water_low', False)
         
@@ -49,9 +51,10 @@ class MissionControllerNode(Node):
             
         # Build Behavior Tree
         self.tree = self.build_behavior_tree()
+        self.install_delivery_integration()
         
         # Timer for ticking the BT (10 Hz)
-        self.timer = self.create_timer(0.1, self.tick_tree)
+        self.timer = self.create_timer(0.1, self.tick_tree, clock=self.delivery_watchdog_clock)
         
         self.get_logger().info('Mission Controller Node (BT based) started.')
 
@@ -62,6 +65,7 @@ class MissionControllerNode(Node):
         self.blackboard.set('SYSTEM_localization_ok', msg.localization_ok)
         self.blackboard.set('SYSTEM_battery_low', msg.battery_low)
         self.blackboard.set('SYSTEM_water_low', msg.water_low)
+        self.delivery_robot_status(msg)
 
     def cb_customer_status(self, msg: CustomerStatus):
         self.blackboard.set('CUSTOMER_detected', msg.customer_detected)
@@ -135,7 +139,7 @@ class MissionControllerNode(Node):
 
     def tick_tree(self):
         # Tick the Behavior Tree
-        status = self.tree.tick(self.blackboard)
+        self.tick_with_delivery()
         # We can log the status if needed, but we keep it quiet to avoid log spam
         # print(f"BT Status: {status}")
 
